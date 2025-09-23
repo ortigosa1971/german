@@ -3,76 +3,67 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>HISTORICO ALFARNATE</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+  <title>Historial</title>
+
+  <!-- (Tu archivo original tenía Tailwind como <link>; lo dejo tal cual por compatibilidad) -->
+  <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+
   <style>
-    body{
-      background: #202c3b;
+    body {
+      background-color: #202c3b;
       color: #00bfff;
       font-family: 'Orbitron', sans-serif;
-      padding:20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+      padding: 20px;
     }
-    h1{ font-size:2rem; font-weight:bold; text-align:center; margin-bottom:20px;}
-    .controls{ display:flex; gap:10px; justify-content:center; margin-bottom:20px;}
-    .controls button{ background:#00bfff; color:#000; padding:8px 16px; border-radius:6px; font-weight:bold;}
-    .table-wrap{
-      max-height:70vh;
-      overflow:auto;
-      border:1px solid rgba(0,191,255,.25);
-      border-radius:12px;
-    }
-    table{ width:100%; border-collapse:collapse; min-width:900px; }
-    thead th{
-      position:sticky; top:0;
-      background:#202c3b; color:#00bfff; z-index:2;
-    }
-    th,td{ padding:8px; border-bottom:1px solid rgba(0,191,255,.15); text-align:center; white-space:nowrap; }
-    tbody tr:nth-child(even){ background:rgba(255,255,255,.05); }
+    h1 { font-size: 3rem; margin-bottom: 20px; }
+    p  { font-size: 1.2rem; opacity: .9; }
 
-    /* Opcional: fija también la primera columna
-    thead th:first-child, tbody td:first-child{
-      position:sticky; left:0; background:#202c3b; z-index:3;
+    .btn {
+      background-color: #00bfff;
+      color: #000;
+      padding: 12px 22px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 22px;
+      box-shadow: 0 0 10px rgba(0,191,255,.4);
+      transition: transform .08s ease, background-color .25s ease;
+      border: none;
     }
-    */
+    .btn:hover { background-color: #00a8e0; }
+    .btn:active { transform: scale(.98); }
+
+    .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
   </style>
 </head>
 <body>
-  <h1>HISTORICO ALFARNATE</h1>
-  <div class="controls">
-    <button>Cargar datos</button>
-    <button>Exportar CSV</button>
-    <button>Exportar Excel</button>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Hora local</th>
-          <th>Temp (°C)</th>
-          <th>P. rocío (°C)</th>
-          <th>Humedad (%)</th>
-          <th>Presión (hPa)</th>
-          <th>Viento (km/h)</th>
-          <th>Ráfaga (km/h)</th>
-          <th>Dir (°)</th>
-          <th>Precip (mm)</th>
-          <th>UV</th>
-          <th>Rad (W/m²)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>2025-09-23 00:04:49</td><td>14.0</td><td>-3.0</td><td>31</td><td>1016.6</td><td>0.0</td><td>0.0</td><td>0</td><td>0.00</td><td>0.0</td><td>0.0</td>
-        </tr>
-        <tr>
-          <td>2025-09-23 00:14:49</td><td>14.0</td><td>-3.0</td><td>32</td><td>1016.6</td><td>0.0</td><td>0.0</td><td>0</td><td>0.00</td><td>0.0</td><td>0.0</td>
-        </tr>
-        <tr>
-          <td>2025-09-23 00:19:49</td><td>14.0</td><td>-3.0</td><td>32</td><td>1016.6</td><td>0.0</td><td>0.0</td><td>0</td><td>0.00</td><td>0.0</td><td>0.0</td>
-        </tr>
-      </tbody>
-    </table>
+  <h1>📜 Historial</h1>
+  <p>Pulsa el botón para abrir el historial en Railway.</p>
+
+  <div class="row">
+    <!-- Abre el historial en la MISMA pestaña -->
+    <button
+      class="btn"
+      onclick="window.location.href='https://viejo-production.up.railway.app'">
+      Abrir historial
+    </button>
+
+    <!-- Si quieres que se abra en una pestaña nueva, usa este en su lugar -->
+    <!--
+    <a class="btn" href="https://viejo-production.up.railway.app" target="_blank" rel="noopener noreferrer">
+      Abrir historial (nueva pestaña)
+    </a>
+    -->
+
+    <!-- Botón de volver opcional (ajusta la ruta si procede) -->
+    <button class="btn" onclick="window.location.href='inicio.html'">Volver</button>
   </div>
 </body>
 </html>
+
