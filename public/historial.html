@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Historial</title>
+
+  <!-- Mantengo tu línea (aunque no la uses). Si no usas Tailwind, puedes quitarla. -->
+  <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+  <!-- Carga de la fuente Orbitron -->
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      background-color: #202c3b;
+      color: #00bfff;
+      font-family: 'Orbitron', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+      padding: 20px;
+    }
+    h1 { font-size: 3rem; margin-bottom: 20px; }
+    p  { font-size: 1.2rem; opacity: .9; }
+
+    .btn {
+      background-color: #00bfff;
+      color: #000;
+      padding: 12px 22px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 22px;
+      box-shadow: 0 0 10px rgba(0,191,255,.4);
+      transition: transform .08s ease, background-color .25s ease;
+      border: none;
+      text-decoration: none; /* para los <a> */
+      display: inline-block;
+    }
+    .btn:hover { background-color: #00a8e0; }
+    .btn:active { transform: scale(.98); }
+
+    .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+
+    /* === Tabla scrollable con cabecera fija === */
+    .table-wrap{
+      width: min(1100px, 95vw);
+      margin-top: 28px;
+      border: 1px solid rgba(0,191,255,.25);
+      border-radius: 12px;
+      box-shadow: 0 0 14px rgba(0,191,255,.18);
+      background: rgba(0,0,0,.12);
+      backdrop-filter: blur(3px);
+      max-height: 70vh;      /* alto visible; crea scroll vertical */
+      overflow: auto;        /* permite scroll para que sticky funcione */
+      text-align: left;      /* la tabla por defecto a la izquierda */
+    }
+    table{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+      color: rgba(255,255,255,0.92);
+    }
+    thead th{
+      position: sticky;
+      top: 0;                 /* <- fija la cabecera arriba */
+      background: #202c3b;    /* mismo fondo para que no parpadee */
+      color: #00bfff;
+      z-index: 2;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+    th, td{
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(0,191,255,.12);
+      text-align: center;
+      white-space: nowrap;    /* evita saltos raros; quítalo si quieres */
+    }
+    tbody tr:nth-child(even){ background: rgba(255,255,255,.03); }
+  </style>
+</head>
+<body>
+  <h1>📜 Historial</h1>
+  <p>Pulsa el botón para abrir el historial en Railway.</p>
+
+  <div class="row">
+    <!-- Abre el historial en la MISMA pestaña -->
+    <a class="btn" href="https://viejo-production.up.railway.app">
+      Abrir historial
+    </a>
+
+    <!-- Botón de volver opcional -->
+    <a class="btn" href="inicio.html">Volver</a>
+  </div>
+
+  <!-- === Tabla con cabecera que queda fija al hacer scroll === -->
+  <div class="table-wrap" aria-label="Historial meteorológico">
+    <table>
+      <thead>
+        <tr>
+          <th>Hora local</th>
+          <th>Temp (°C)</th>
+          <th>P. rocío (°C)</th>
+          <th>Humedad (%)</th>
+          <th>Presión (hPa)</th>
+          <th>Viento (km/h)</th>
+          <th>Ráfaga (km/h)</th>
+          <th>Dir (°)</th>
+          <th>Precip (mm)</th>
+          <th>UV</th>
+          <th>Rad (W/m²)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Ejemplos; sustituye por tus datos reales -->
+        <tr>
+          <td>12:00</td><td>23.1</td><td>15.0</td><td>62</td><td>1015.2</td>
+          <td>12</td><td>20</td><td>180</td><td>0.0</td><td>5</td><td>300</td>
+        </tr>
+        <tr>
+          <td>12:10</td><td>23.3</td><td>15.2</td><td>61</td><td>1015.0</td>
+          <td>11</td><td>18</td><td>182</td><td>0.0</td><td>5</td><td>302</td>
+        </tr>
+        <tr>
+          <td>12:20</td><td>23.4</td><td>15.3</td><td>60</td><td>1014.8</td>
+          <td>10</td><td>16</td><td>185</td><td>0.0</td><td>5</td><td>305</td>
+        </tr>
+        <!-- ...más filas... -->
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Si tienes un header fijo arriba, ajusta el "top" de thead th (por ejemplo: top: 56px;) -->
+</body>
+</html>
