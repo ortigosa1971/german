@@ -1,10 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Estaci贸n Meteorol贸gica</title>
-  <!-- CDN de Tailwind (ok para desarrollo). Para producci贸n, compila CSS localmente. -->
+  <title>Estación Meteorológica</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   
@@ -81,159 +81,104 @@
   <h1 class="text-4xl font-bold text-white mb-4">ALFARNATE</h1>
 
   <div class="weather-screen">
-    <h1 class="text-2xl font-bold">馃摗 Estaci贸n Meteorol贸gica en tiempo real cada minuto</h1>
+    <h1 class="text-2xl font-bold">📡 Estación Meteorológica en tiempo real cada minuto</h1>
     <div class="data-grid">
-      <div class="data-box"><p class="label">馃尅锔?Temperatura</p><p class="value" id="temperature">--</p></div>
-      <div class="data-box"><p class="label">馃挧 Humedad</p><p class="value" id="humidity">--</p></div>
-      <div class="data-box"><p class="label">馃挩 Viento</p><p class="value" id="wind-speed">--</p></div>
-      <div class="data-box"><p class="label">馃Л Direcci贸n</p><p class="value" id="wind-dir">--</p></div>
-      <div class="data-box"><p class="label">馃導锔?Lluvia</p><p class="value" id="rainfall">--</p></div>
-      <div class="data-box"><p class="label">馃實 Presi贸n</p><p class="value" id="pressure">--</p></div>
-      <div class="data-box"><p class="label">鈽€锔?脥ndice UV</p><p class="value" id="uv-index">--</p></div>
-      <div class="data-box"><p class="label">馃晵 Hora</p><p class="value" id="time">--</p></div>
+      <div class="data-box"><p class="label">🌡️ Temperatura</p><p class="value" id="temperature">--</p></div>
+      <div class="data-box"><p class="label">💧 Humedad</p><p class="value" id="humidity">--</p></div>
+      <div class="data-box"><p class="label">💨 Viento</p><p class="value" id="wind-speed">--</p></div>
+      <div class="data-box"><p class="label">🧭 Dirección</p><p class="value" id="wind-dir">--</p></div>
+      <div class="data-box"><p class="label">🌧️ Lluvia</p><p class="value" id="rainfall">--</p></div>
+      <div class="data-box"><p class="label">🌍 Presión</p><p class="value" id="pressure">--</p></div>
+      <div class="data-box"><p class="label">☀️ Índice UV</p><p class="value" id="uv-index">--</p></div>
+      <div class="data-box"><p class="label">🕒 Hora</p><p class="value" id="time">--</p></div>
     </div>
     <p id="error-message" class="text-red-500 text-sm mt-2 hidden"></p>
   </div>
 
   <div class="weather-screen">
-    <h2 class="text-xl font-bold mb-4">馃敭 Pron贸stico de 7 d铆as</h2>
+    <h2 class="text-xl font-bold mb-4">🔮 Pronóstico de 7 días</h2>
     <div id="forecast" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-left text-sm sm:text-base"></div>
   </div>
 
-  <div class="weather-screen w-full max-w-2xl">
-    <h2 class="text-xl font-bold mb-2">鈽?Lluvia acumulada por mes</h2>
-    <div class="flex items-center gap-2 mb-2">
-      <input id="mes-selector" type="month" class="px-3 py-2 rounded text-black" />
-      <button id="boton-mes" class="top-right-button">Calcular</button>
-    </div>
-    <div id="resultado-mes" class="mb-2"></div>
-    <div id="spinner-mes"></div>
-    <canvas id="grafico-lluvia" height="200"></canvas>
-  </div>
+  
 
-  <!-- Overlay por sesi贸n cerrada -->
+  <!-- Overlay por sesión cerrada -->
   <div id="overlay-sesion" class="hidden fixed inset-0 bg-white flex items-center justify-center z-50">
     <p class="text-red-600 text-4xl font-extrabold text-center px-6">
-      鈿狅笍 Tu sesi贸n ha sido cerrada<br>porque iniciaste sesi贸n en otro dispositivo.
+      ⚠️ Tu sesión ha sido cerrada<br>porque iniciaste sesión en otro dispositivo.
     </p>
   </div>
 
   <script>
-    // ---------- Utilidad com煤n ----------
-    function parseJsonSeguro(texto) {
-      if (!texto || !texto.trim()) {
-        throw new Error("Respuesta vac铆a (sin cuerpo).");
-      }
-      const inicio = texto.trim().slice(0, 120).toLowerCase();
-      if (inicio.startsWith("<!doctype") || inicio.startsWith("<html")) {
-        throw new Error("El servidor devolvi贸 HTML (posible error o CORS). Fragmento: " + texto.slice(0, 180));
-      }
-      try {
-        return JSON.parse(texto);
-      } catch (e) {
-        throw new Error("JSON inv谩lido. Fragmento: " + texto.slice(0, 180));
-      }
-    }
-
-    // ---------- Tiempo actual ----------
     async function fetchWeatherData() {
       const apiKey = 'bbaca6cd82b24eaeaca6cd82b20eae92';
       const stationId = 'IALFAR32';
       const url = `https://api.weather.com/v2/pws/observations/current?stationId=${stationId}&format=json&units=m&apiKey=${apiKey}`;
-
-      const $ = (id) => document.getElementById(id);
-      const set = (id, val) => { const el = $(id); if (el) el.textContent = val; };
-      const showError = (msg) => {
-        const el = $('error-message');
-        if (el) {
-          el.textContent = `鈿狅笍 Error: ${msg}`;
-          el.classList.remove('hidden');
-        }
-      };
-
       try {
-        const res = await fetch(url, { headers: { "Accept": "application/json" }, cache: "no-store" });
-        if (!res.ok) {
-          const texto = await res.text().catch(() => "");
-          throw new Error(`HTTP ${res.status} ${res.statusText} 鈥?${texto.slice(0,180)}`);
-        }
-        const texto = await res.text();
-        const data = parseJsonSeguro(texto);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-        const obs = data?.observations?.[0];
-        if (!obs) throw new Error("Datos no disponibles en la respuesta (observations[0] ausente).");
+        // Parseo seguro en vez de response.json()
+        const text = await response.text();
+        if (!text) throw new Error('Respuesta vacía de la API');
+        const ct = (response.headers.get('content-type') || '').toLowerCase();
+        if (!ct.includes('application/json')) throw new Error('Respuesta no es JSON');
+        const data = JSON.parse(text);
 
-        const metric = obs.metric ?? {};
-
-        set('temperature', Number.isFinite(metric.temp) ? `${metric.temp} 掳C` : '--');
-        set('humidity', Number.isFinite(obs.humidity) ? `${obs.humidity} %` : '--');
-        set('wind-speed', Number.isFinite(metric.windSpeed) ? `${metric.windSpeed} km/h` : '--');
-
-        const dir = Number.isFinite(obs.winddir) ? obs.winddir : null;
-        if (dir === null) {
-          set('wind-dir', '--');
-        } else {
-          const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
-          const idx = Math.round(dir / 45) % 8;
-          set('wind-dir', `${dir}掳 (${dirs[idx]})`);
-        }
-
-        set('rainfall', Number.isFinite(metric.precipTotal) ? `${metric.precipTotal} mm` : '0 mm');
-        set('pressure', Number.isFinite(metric.pressure) ? `${metric.pressure} hPa` : '--');
-        set('uv-index', Number.isFinite(obs.uv) ? obs.uv : '--');
-
-        const fecha = obs.obsTimeLocal ? new Date(obs.obsTimeLocal) : null;
-        set('time', fecha ? fecha.toLocaleString('es-ES') : '--');
-
-        $('error-message')?.classList.add('hidden');
+        const obs = data.observations?.[0];
+        if (!obs) throw new Error("Datos no disponibles.");
+        const metric = obs.metric || {};
+        document.getElementById('temperature').textContent = `${metric.temp} °C`;
+        document.getElementById('humidity').textContent = `${obs.humidity} %`;
+        document.getElementById('wind-speed').textContent = `${metric.windSpeed} km/h`;
+        const dir = obs.winddir;
+        const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+        const idx = Math.round(dir / 45) % 8;
+        document.getElementById('wind-dir').textContent = `${dir}° (${dirs[idx]})`;
+        document.getElementById('rainfall').textContent = `${metric.precipTotal} mm`;
+        document.getElementById('pressure').textContent = `${metric.pressure} hPa`;
+        document.getElementById('uv-index').textContent = obs.uv;
+        document.getElementById('time').textContent = new Date(obs.obsTimeLocal).toLocaleString();
+        document.getElementById('error-message').classList.add('hidden');
       } catch (err) {
-        console.error("鈿狅笍 Error al obtener los datos:", err);
-        showError(err.message || String(err));
+        console.error('⚠️ Error al obtener la meteo:', err);
+        const em = document.getElementById('error-message');
+        if (em) { em.textContent = 'No se pudo obtener la información meteorológica.'; em.classList.remove('hidden'); }
       }
     }
 
-    // ---------- Pron贸stico ----------
     async function fetchForecast() {
       const lat = 36.985;
       const lon = -4.223;
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_min,temperature_2m_max,weathercode,precipitation_probability_max&timezone=auto&forecast_days=7`;
-      const cont = document.getElementById("forecast");
       try {
-        const res = await fetch(url, { headers: { "Accept": "application/json" }, cache: "no-store" });
-        if (!res.ok) {
-          const texto = await res.text().catch(() => "");
-          throw new Error(`HTTP ${res.status} ${res.statusText} 鈥?${texto.slice(0,180)}`);
-        }
-        const texto = await res.text();
-        const data = parseJsonSeguro(texto);
-
-        const dias = data?.daily?.time ?? [];
-        const min = data?.daily?.temperature_2m_min ?? [];
-        const max = data?.daily?.temperature_2m_max ?? [];
-        const code = data?.daily?.weathercode ?? [];
-        const lluvia = data?.daily?.precipitation_probability_max ?? [];
-
+        const res = await fetch(url);
+        const data = await res.json();
+        const forecastDiv = document.getElementById("forecast");
+        const dias = data.daily.time;
+        const min = data.daily.temperature_2m_min;
+        const max = data.daily.temperature_2m_max;
+        const code = data.daily.weathercode;
+        const lluvia = data.daily.precipitation_probability_max;
         const desc = {
-          0: 'Despejado 鈽€锔?, 1: 'Mayormente despejado 馃尋锔?, 2: 'Parcialmente nublado 鉀?,
-          3: 'Nublado 鈽侊笍', 45: 'Niebla 馃尗锔?, 48: 'Niebla escarchada 馃尗锔忊潉锔?,
-          51: 'Llovizna ligera 馃對锔?, 53: 'Llovizna moderada 馃導锔?, 55: 'Llovizna densa 馃導锔?,
-          61: 'Lluvia ligera 馃對锔?, 63: 'Lluvia moderada 馃導锔?, 65: 'Lluvia intensa 馃導锔?,
-          71: 'Nieve ligera 馃尐锔?, 73: 'Nieve moderada 馃尐锔?, 75: 'Nieve intensa 鉂勶笍',
-          80: 'Chubascos ligeros 馃對锔?, 81: 'Chubascos moderados 馃導锔?, 82: 'Chubascos fuertes 鉀堬笍'
+          0: 'Despejado ☀️', 1: 'Mayormente despejado 🌤️', 2: 'Parcialmente nublado ⛅',
+          3: 'Nublado ☁️', 45: 'Niebla 🌫️', 48: 'Niebla escarchada 🌫️❄️',
+          51: 'Llovizna ligera 🌦️', 53: 'Llovizna moderada 🌧️', 55: 'Llovizna densa 🌧️',
+          61: 'Lluvia ligera 🌦️', 63: 'Lluvia moderada 🌧️', 65: 'Lluvia intensa 🌧️',
+          71: 'Nieve ligera 🌨️', 73: 'Nieve moderada 🌨️', 75: 'Nieve intensa ❄️',
+          80: 'Chubascos ligeros 🌦️', 81: 'Chubascos moderados 🌧️', 82: 'Chubascos fuertes ⛈️'
         };
-
-        cont.innerHTML = '';
+        forecastDiv.innerHTML = '';
         for (let i = 0; i < dias.length; i++) {
           const dia = new Date(dias[i]).toLocaleDateString('es-ES', { weekday: 'long' });
-          cont.innerHTML += `<div><strong>${dia}</strong><br>${desc[code[i]] || 'Clima'}<br>馃尅锔?${min[i]}掳C - ${max[i]}掳C<br>馃導锔?${lluvia[i]}%</div>`;
+          forecastDiv.innerHTML += `<div><strong>${dia}</strong><br>${desc[code[i]] || 'Clima'}<br>🌡️ ${min[i]}°C - ${max[i]}°C<br>🌧️ ${lluvia[i]}%</div>`;
         }
       } catch (e) {
-        cont.textContent = "Error al cargar el pron贸stico";
-        console.error("Error al obtener pron贸stico:", e);
+        document.getElementById("forecast").textContent = "Error al cargar el pronóstico";
+        console.error("Error al obtener pronóstico:", e);
       }
     }
 
-    // ---------- Lluvia acumulada por mes ----------
     function mostrarLluviaAcumuladaPorMes() {
       const apiKey = 'bbaca6cd82b24eaeaca6cd82b20eae92';
       const stationId = 'IALFAR32';
@@ -243,7 +188,7 @@
       const canvas = document.getElementById('grafico-lluvia');
       const ctx = canvas.getContext('2d');
       if (!mesInput) {
-        resultado.textContent = "鈿狅笍 Selecciona un mes v谩lido.";
+        resultado.textContent = "⚠️ Selecciona un mes válido.";
         return;
       }
       const [year, month] = mesInput.split("-");
@@ -253,26 +198,20 @@
       const endDate = `${year}${month}${endDay}`;
       const url = `https://api.weather.com/v2/pws/history/daily?stationId=${stationId}&format=json&units=m&startDate=${startDate}&endDate=${endDate}&apiKey=${apiKey}`;
       spinner.style.display = "block";
-      resultado.textContent = "馃攧 Consultando...";
-      fetch(url, { headers: { "Accept": "application/json" }, cache: "no-store" })
-        .then(async res => {
-          if (!res.ok) {
-            const texto = await res.text().catch(() => "");
-            throw new Error(`HTTP ${res.status} ${res.statusText} 鈥?${texto.slice(0,180)}`);
-          }
-          const texto = await res.text();
-          const data = parseJsonSeguro(texto);
-          const obs = data?.observations ?? [];
-          if (!Array.isArray(obs) || obs.length === 0) {
-            throw new Error("Sin datos de observaci贸n para ese mes.");
-          }
-          const dias = obs.map(day => {
+      resultado.textContent = "🔄 Consultando...";
+      fetch(url)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+          return res.json();
+        })
+        .then(data => {
+          const dias = data.observations.map(day => {
             const fecha = new Date(day.obsTimeLocal);
             return fecha.getDate();
           });
-          const lluviaDiaria = obs.map(day => (day.metric?.precipTotal ?? 0));
+          const lluviaDiaria = data.observations.map(day => day.metric?.precipTotal || 0);
           const total = lluviaDiaria.reduce((a, b) => a + b, 0);
-          resultado.textContent = `馃導锔?Lluvia total en ${month}/${year}: ${total.toFixed(2)} mm`;
+          resultado.textContent = `🌧️ Lluvia total en ${month}/${year}: ${total.toFixed(2)} mm`;
           if (window.miGrafico) window.miGrafico.destroy();
           window.miGrafico = new Chart(ctx, {
             type: 'bar',
@@ -296,8 +235,8 @@
           });
         })
         .catch(err => {
-          resultado.textContent = "鉂?No se pudieron obtener los datos.";
-          console.error("鈿狅笍 Error al obtener los datos del mes:", err);
+          resultado.textContent = "❌ No se pudieron obtener los datos.";
+          console.error("⚠️ Error al obtener los datos del mes:", err);
         })
         .finally(() => {
           spinner.style.display = "none";
@@ -314,23 +253,44 @@
       }
     });
 
-    // Verificaci贸n de sesi贸n activa (opcional, requiere backend)
-    setInterval(() => {
-      fetch('/verificar-sesion', { cache: 'no-store' })
-        .then(res => {
-          if (res.status === 401) {
-            window.location.href = '/login.html?error=sesion';
-          }
-        }).catch(() => {});
-    }, 1500);
-  </script>
+    // Verificación de sesión activa
+    setInterval(async () => {
+      try {
+        const res = await fetch('/verificar-sesion', { cache: 'no-store' });
+        if (res.status === 401) {
+          window.location.href = '/login.html?error=sesion';
+          return;
+        }
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        const text = await res.text();
+        if (!text) return;
+        if (!ct.includes('application/json')) return;
+        const data = JSON.parse(text);
+        if (data && data.activo === false) {
+          window.location.href = '/login.html?error=sesion';
+        }
+      } catch (e) {
+        console.debug('verificar-sesion fallo:', e);
+      }
+    }, 1500);</script>
 
-  <div class="weather-screen">
-    <button onclick="location.href='https://viejo-production-3e8d.up.railway.app/'" class="top-right-button mt-4 w-full sm:w-auto">馃搳 Ver Historial</button>
+<div class="weather-screen">
+    <button onclick="location.href='https://viejo-production-3e8d.up.railway.app/'" class="top-right-button mt-4 w-full sm:w-auto">📊 Ver Historial</button>
+    
   </div>
 
 </body>
+
 </html>
+
+
+
+
+
+
+
+
+
 
 
 
