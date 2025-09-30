@@ -83,6 +83,14 @@
   <div class="weather-screen">
     <h1 class="text-2xl font-bold">📡 Estación Meteorológica en tiempo real cada minuto</h1>
     <div class="data-grid">
+<!-- Tarjeta añadida: Lluvia acumulada total -->
+<div class="bg-slate-800/60 backdrop-blur rounded-2xl p-4 shadow-lg border border-slate-700 w-full max-w-xs">
+  <div class="text-slate-300 text-sm">Lluvia acumulada</div>
+  <div id="total-lluvia" class="text-4xl font-extrabold text-cyan-300 mt-1">--</div>
+  <div class="text-slate-400 text-xs mt-1">desde el primer registro</div>
+</div>
+
+
       <div class="data-box"><p class="label">🌡️ Temperatura</p><p class="value" id="temperature">--</p></div>
       <div class="data-box"><p class="label">💧 Humedad</p><p class="value" id="humidity">--</p></div>
       <div class="data-box"><p class="label">💨 Viento</p><p class="value" id="wind-speed">--</p></div>
@@ -279,9 +287,42 @@
     
   </div>
 
+<script>
+(async function cargarTotalLluvia(){
+  const el = document.getElementById('total-lluvia');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/lluvia/total', { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const { total_mm } = await r.json();
+    el.textContent = (Number(total_mm) || 0).toFixed(1) + ' mm';
+  } catch (e) {
+    console.error(e);
+    el.textContent = '—';
+    el.title = 'No se pudo cargar la lluvia total';
+  }
+})();
+</script>
+
 </body>
 
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
