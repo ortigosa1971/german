@@ -209,16 +209,75 @@ const PORT = process.env.PORT || 8080;
 // === Ruta añadida: total de lluvia acumulada ===
 app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
   try {
-    /* BD (SQLite):
-    const row = db.prepare('SELECT COALESCE(SUM(lluvia_mm), 0) AS total FROM lecturas').get();
-    return res.json({ total_mm: Number(row.total) });
-    */
-    const url = 'https://TU_API/lluvia?desde=1900-01-01'; // <-- AJUSTA
-    const r = await fetch(url);
+    const apiUrl = process.env.LLUVIA_API_URL;
+    if (!apiUrl) {
+      return res.status(501).json({ error: 'Config faltante', detalle: 'Define LLUVIA_API_URL en .env con el endpoint de tu API.' });
+    }
+    const r = await fetch(apiUrl);
     if (!r.ok) throw new Error('API externa HTTP ' + r.status);
-    const datos = await r.json(); // p.ej. [{fecha:'...', mm: 2.4}, ...]
-    const total = Array.isArray(datos) ? datos.reduce((acc, d) => acc + (Number(d.mm) || 0), 0) : 0;
-    return res.json({ total_mm: Number(total.toFixed(1)) });
+    const datos = await r.json();
+
+    // Helper para castear a número seguro
+    const num = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    // 0) Si viene directamente un número (o string numérico)
+    if (typeof datos === 'number' || (typeof datos === 'string' && !Number.isNaN(Number(datos)))) {
+      return res.json({ total_mm: num(datos) });
+    }
+
+    // 1) Si viene total directo
+    if (datos && typeof datos === 'object') {
+      for (const k of ['total_mm','total','acumulado','acumulado_mm','acumulado_dia_mm']) {
+        if (k in datos && (typeof datos[k] === 'number' || typeof datos[k] === 'string')) {
+          return res.json({ total_mm: num(datos[k]) });
+        }
+      }
+    }
+
+    // 2) Si viene array (posible lista de lecturas / días)
+    const arr = Array.isArray(datos) ? datos
+              : (datos && (Array.isArray(datos.items) ? datos.items : (Array.isArray(datos.data) ? datos.data : null)));
+
+    if (arr) {
+      // 2.a) Si los elementos ya traen 'acumulado*', usar el último por fecha o el mayor valor
+      const pickAccum = (o) => o?.acumulado_mm ?? o?.acumulado ?? o?.acumulado_dia_mm ?? null;
+      let hadAccum = false;
+      let byDate = [];
+      for (const it of arr) {
+        const acc = pickAccum(it);
+        if (acc != null) {
+          hadAccum = true;
+          byDate.push({
+            fecha: it?.fecha || it?.date || it?.timestamp || null,
+            val: num(acc)
+          });
+        }
+      }
+      if (hadAccum) {
+        // Preferir último por fecha si existe alguna
+        const withFecha = byDate.filter(x => x.fecha);
+        if (withFecha.length) {
+          // Ordenar por fecha asc y coger el último
+          withFecha.sort((a,b) => (new Date(a.fecha)) - (new Date(b.fecha)));
+          return res.json({ total_mm: num(withFecha[withFecha.length-1].val) });
+        }
+        // En su defecto, el mayor valor (acumulado final)
+        const maxVal = byDate.reduce((m,x) => Math.max(m, x.val), 0);
+        return res.json({ total_mm: num(maxVal) });
+      }
+
+      // 2.b) Si NO traen 'acumulado*', sumar por campos típicos
+      const total = arr.reduce((acc, d) => {
+        const v = d?.mm ?? d?.lluvia ?? d?.precip_mm ?? d?.rain ?? 0;
+        return acc + num(v);
+      }, 0);
+      return res.json({ total_mm: Number(total.toFixed(2)) });
+    }
+
+    return res.status(500).json({ error: 'Formato no reconocido', detalle: 'No se encontró un total ni un array utilizable.' });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'No se pudo calcular el total', detalle: String(e.message || e) });
@@ -227,6 +286,11 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
 // === Fin ruta añadida ===
 
 app.listen(PORT, () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`));
+
+
+
+
+
 
 
 
