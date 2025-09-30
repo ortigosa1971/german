@@ -204,7 +204,34 @@ app.post('/admin/forzar-logout', async (req, res) => {
 
 // ====== Arranque ======
 const PORT = process.env.PORT || 8080;
+
+
+// === Ruta añadida: total de lluvia acumulada ===
+app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
+  try {
+    /* BD (SQLite):
+    const row = db.prepare('SELECT COALESCE(SUM(lluvia_mm), 0) AS total FROM lecturas').get();
+    return res.json({ total_mm: Number(row.total) });
+    */
+    const url = 'https://TU_API/lluvia?desde=1900-01-01'; // <-- AJUSTA
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('API externa HTTP ' + r.status);
+    const datos = await r.json(); // p.ej. [{fecha:'...', mm: 2.4}, ...]
+    const total = Array.isArray(datos) ? datos.reduce((acc, d) => acc + (Number(d.mm) || 0), 0) : 0;
+    return res.json({ total_mm: Number(total.toFixed(1)) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'No se pudo calcular el total', detalle: String(e.message || e) });
+  }
+});
+// === Fin ruta añadida ===
+
 app.listen(PORT, () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`));
+
+
+
+
+
 
 
 
