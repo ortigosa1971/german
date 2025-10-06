@@ -1,17 +1,16 @@
 {
-  "name": "german-weather-app",
-  "version": "1.0.0",
-  "private": true,
-  "type": "commonjs",
-  "scripts": {
-    "start": "node server.js"
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
   },
-  "dependencies": {
-    "express": "^4.19.2",
-    "express-session": "^1.17.3",
-    "connect-sqlite3": "^0.9.15",
-    "better-sqlite3": "^9.4.5",
-    "cors": "^2.8.5"
-  },
-  "engines": { "node": ">=18" }
+  "deploy": {
+    "runtime": "V2",
+    "numReplicas": 1,
+    "sleepApplication": false,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "startCommand": "npm start",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 120
+  }
 }
