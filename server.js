@@ -1,5 +1,6 @@
 // server.js — sesión única, reemplaza sesión anterior automáticamente, con claim atómico
 // Listo para Railway: incluye /health y raíz '/'
+// Corrección completa para CORS (front/back en dominios distintos) y cookies cross-site.
 
 const express = require('express');
 const session = require('express-session');
@@ -8,19 +9,48 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 const util = require('util');
+const cors = require('cors');
 
 const app = express();
 app.set('trust proxy', 1);
 
+// ====== Config ======
+const FRONT_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://german-production-d2b4.up.railway.app')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
 // ====== Carpetas ======
-const DB_DIR = path.join(__dirname, 'db');
+const DB_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, 'db');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// ====== CORS (antes de session y rutas) ======
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // permite curl/health
+    return FRONT_ORIGINS.includes(origin)
+      ? cb(null, true)
+      : cb(new Error('CORS not allowed'), false);
+  },
+  credentials: true,
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.options('*', cors({
+  origin: FRONT_ORIGINS,
+  credentials: true,
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 // ====== Sesiones (SQLite) ======
+const SESSIONS_DIR = process.env.SESSIONS_DIR || '/data';
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+
 const store = new SQLiteStore({
   db: 'sessions.sqlite',
-  dir: DB_DIR
+  dir: SESSIONS_DIR
 });
 
 app.use(session({
@@ -30,8 +60,8 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    sameSite: process.env.SAMESITE || 'lax', // 'none' si front/back en dominios distintos (+ secure:true)
-    secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
+    sameSite: 'none',               // requerido para dominios distintos
+    secure: true,                   // Railway usa HTTPS
     maxAge: 1000 * 60 * 60 * 8
   }
 }));
@@ -46,7 +76,11 @@ app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
 // ====== DB usuarios ======
-const db = new Database(path.join(DB_DIR, 'usuarios.db'));
+const USERS_DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'usuarios.db');
+const dbDir = path.dirname(USERS_DB_PATH);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+
+const db = new Database(USERS_DB_PATH);
 db.pragma('journal_mode = wal');
 db.prepare(`
   CREATE TABLE IF NOT EXISTS users (
@@ -126,35 +160,57 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// ====== Middleware: sesión única ======
+// ====== Middleware: sesión única (API -> JSON 401; páginas -> redirect) ======
 async function requiereSesionUnica(req, res, next) {
   try {
-    if (!req.session?.usuario) return res.redirect('/login.html');
+    const isApi = req.path.startsWith('/api/');
+
+    if (!req.session?.usuario) {
+      return isApi
+        ? res.status(401).json({ ok: false, error: 'unauthorized' })
+        : res.redirect('/login.html');
+    }
 
     const row = db.prepare('SELECT session_id FROM users WHERE username = ?').get(req.session.usuario);
-    if (!row) return res.redirect('/login.html');
+    if (!row) {
+      return isApi
+        ? res.status(401).json({ ok: false, error: 'unauthorized' })
+        : res.redirect('/login.html');
+    }
 
     if (!row.session_id) {
-      req.session.destroy(() => res.redirect('/login.html?error=sesion_invalida'));
-      return;
+      return req.session.destroy(() => {
+        return isApi
+          ? res.status(401).json({ ok: false, error: 'session_invalid' })
+          : res.redirect('/login.html?error=sesion_invalida');
+      });
     }
 
     if (row.session_id !== req.sessionID) {
-      req.session.destroy(() => res.redirect('/login.html?error=conectado_en_otra_maquina'));
-      return;
+      return req.session.destroy(() => {
+        return isApi
+          ? res.status(401).json({ ok: false, error: 'logged_elsewhere' })
+          : res.redirect('/login.html?error=conectado_en_otra_maquina');
+      });
     }
 
     const sess = await storeGet(row.session_id);
     if (!sess) {
       db.prepare('UPDATE users SET session_id = NULL WHERE username = ?').run(req.session.usuario);
-      req.session.destroy(() => res.redirect('/login.html?error=sesion_expirada'));
-      return;
+      return req.session.destroy(() => {
+        return isApi
+          ? res.status(401).json({ ok: false, error: 'session_expired' })
+          : res.redirect('/login.html?error=sesion_expirada');
+      });
     }
 
     next();
   } catch (e) {
     console.error(e);
-    res.redirect('/login.html?error=interno');
+    const isApi = req.path.startsWith('/api/');
+    return isApi
+      ? res.status(500).json({ ok: false, error: 'internal' })
+      : res.redirect('/login.html?error=interno');
   }
 }
 
@@ -192,17 +248,6 @@ app.post('/logout', (req, res) => {
   });
 });
 
-// ====== Admin: forzar logout (opcional) ======
-app.post('/admin/forzar-logout', async (req, res) => {
-  const { username } = req.body;
-  const row = db.prepare('SELECT session_id FROM users WHERE username = ?').get(username);
-  if (row?.session_id) {
-    await storeDestroy(row.session_id).catch(() => {});
-    db.prepare('UPDATE users SET session_id = NULL WHERE username = ?').run(username);
-  }
-  res.json({ ok: true });
-});
-
 // =====================
 //  Helpers para Weather
 // =====================
@@ -237,7 +282,7 @@ async function jsonFetch(url) {
 
 // =====================================
 //  Rutas API Weather (públicas/proxy)
-//  (no requieren sesión; añade requiereSesionUnica si quieres)
+//  (sin sesión para evitar 302 en CORS)
 // =====================================
 
 // Datos en tiempo real
@@ -286,7 +331,6 @@ app.get('/api/weather/history', async (req, res) => {
 });
 
 // Lluvia total del año actual (suma precipTotal del histórico)
-// Devuelve { total_mm, year, desde, hasta }
 app.get('/api/lluvia/total/year', async (req, res) => {
   try {
     const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
@@ -319,7 +363,6 @@ app.get('/api/lluvia/total/year', async (req, res) => {
 });
 
 // === Ruta añadida: total de lluvia acumulada desde API externa configurable ===
-// (se mantiene tal cual la enviaste)
 app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
   try {
     const apiUrl = process.env.LLUVIA_API_URL;
@@ -333,7 +376,7 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
     const num = (v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
-    };
+      };
 
     if (typeof datos === 'number' || (typeof datos === 'string' && !Number.isNaN(Number(datos)))) {
       return res.json({ total_mm: num(datos) });
@@ -391,9 +434,7 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
 
 // ====== Arranque ======
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`));
-
-
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión + CORS listo`));
 
 
 
