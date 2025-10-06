@@ -7,8 +7,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- OPCIONAL: define aquí tu backend si quieres fijarlo sin tocar JS -->
-  <!-- <meta name="rail-api-base" content="https://tuapp-production.up.railway.app"> -->
+  <!-- Fija tu backend en Railway -->
+  <meta name="rail-api-base" content="https://produccion-alemana-d2b4.up.railway.app">
 
 <style>
   body {
@@ -139,19 +139,17 @@
     (function initApiBase(){
       const meta = document.querySelector('meta[name="rail-api-base"]');
       const fromMeta = meta && meta.getAttribute('content') || '';
-      // Fallbacks: meta > window.RAIL_API_BASE (si ya lo inyectas) > mismo origin > dominio Railway antiguo
       window.RAIL_API_BASE =
         (fromMeta && fromMeta.trim()) ||
         (window.RAIL_API_BASE && String(window.RAIL_API_BASE)) ||
         (location.origin && String(location.origin)) ||
-        'https://viejo-production-3e8d.up.railway.app';
+        'https://produccion-alemana-d2b4.up.railway.app';
     })();
 
     const STATION_ID = 'IALFAR32';
     const FETCH_OPTS = { cache: 'no-store', credentials: 'include' };
 
     async function fetchWeatherData() {
-      // Ahora pide a tu backend en Railway
       const url = `${window.RAIL_API_BASE}/api/weather/current?stationId=${encodeURIComponent(STATION_ID)}`;
       try {
         const response = await fetch(url, FETCH_OPTS);
@@ -163,13 +161,12 @@
         if (!ct.includes('application/json')) throw new Error('Respuesta no es JSON');
         const data = JSON.parse(text);
 
-        // Se espera un payload tipo Weather.com proxied por tu backend
         const obs = data.observations?.[0] || data.data?.observations?.[0] || data.data?.[0] || data?.observations?.[0];
         if (!obs) throw new Error("Datos no disponibles.");
 
         const metric = obs.metric || obs.metrics || {};
         document.getElementById('temperature').textContent = `${metric.temp ?? '—'} °C`;
-        document.getElementById('humidity').textContent = `${obs.humidity ?? '—'} %`;
+        document.getElementById('humidity').textContent   = `${obs.humidity ?? '—'} %`;
         document.getElementById('wind-speed').textContent = `${metric.windSpeed ?? '—'} km/h`;
 
         const dir = Number(obs.winddir);
@@ -177,11 +174,11 @@
         const idx = Number.isFinite(dir) ? Math.round(dir / 45) % 8 : null;
         document.getElementById('wind-dir').textContent = Number.isFinite(dir) ? `${dir}° (${dirs[idx]})` : '—';
 
-        document.getElementById('rainfall').textContent  = `${metric.precipTotal ?? '—'} mm`;
-        document.getElementById('pressure').textContent  = `${metric.pressure ?? '—'} hPa`;
-        document.getElementById('uv-index').textContent  = `${obs.uv ?? '—'}`;
+        document.getElementById('rainfall').textContent = `${metric.precipTotal ?? '—'} mm`;
+        document.getElementById('pressure').textContent = `${metric.pressure ?? '—'} hPa`;
+        document.getElementById('uv-index').textContent = `${obs.uv ?? '—'}`;
         const when = obs.obsTimeLocal || obs.obsTimeUtc;
-        document.getElementById('time').textContent      = when ? new Date(when).toLocaleString() : '—';
+        document.getElementById('time').textContent = when ? new Date(when).toLocaleString() : '—';
 
         document.getElementById('error-message').classList.add('hidden');
       } catch (err) {
@@ -192,7 +189,7 @@
     }
 
     async function fetchForecast() {
-      // Este pronóstico sigue yendo a Open-Meteo (público y sin key). Si prefieres, proxéalo también.
+      // Si prefieres, también puedes proxear Open-Meteo por tu backend
       const lat = 36.985;
       const lon = -4.223;
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_min,temperature_2m_max,weathercode,precipitation_probability_max&timezone=auto&forecast_days=7`;
@@ -224,13 +221,6 @@
       }
     }
 
-    function yyyymmdd(date) {
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, '0');
-      const d = String(date.getDate()).padStart(2, '0');
-      return `${y}${m}${d}`;
-    }
-
     function mostrarLluviaAcumuladaPorMes() {
       const stationId = STATION_ID;
       const mesInput = document.getElementById('mes-selector').value;
@@ -250,7 +240,6 @@
       const endDay = String(endDateObj.getDate()).padStart(2, '0');
       const endDate = `${year}${month}${endDay}`;
 
-      // Ahora pide histórico mensual a tu backend
       const url = `${window.RAIL_API_BASE}/api/weather/history?stationId=${encodeURIComponent(stationId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
 
       spinner.style.display = "block";
@@ -261,13 +250,11 @@
           return res.json();
         })
         .then(data => {
-          // Esperamos un array de días con .observations similar a WU
           const arr = data?.observations || data?.data || [];
           const dias = arr.map(day => {
             const fecha = new Date(day.obsTimeLocal || day.obsTimeUtc || day.date || day.day);
             return Number.isFinite(fecha.getTime()) ? fecha.getDate() : null;
           });
-
           const lluviaDiaria = arr.map(day => (day.metric?.precipTotal ?? day.precipTotal ?? 0) || 0);
           const total = lluviaDiaria.reduce((a, b) => a + (Number(b) || 0), 0);
 
@@ -336,7 +323,7 @@
   </script>
 
   <script>
-  // === NUEVO: cargar total lluvia del año actual desde tu backend ===
+  // === Cargar total lluvia del año actual desde tu backend ===
   (async function cargarTotalLluviaAnual(){
     const el = document.getElementById('total-lluvia');
     const rangoEl = document.getElementById('total-lluvia-rango');
