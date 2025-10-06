@@ -1,5 +1,6 @@
 // server.js — sesión única, reemplaza sesión anterior automáticamente, con claim atómico
 // Listo para Railway: incluye /health y raíz '/'
+
 const express = require('express');
 const session = require('express-session');
 const SQLiteStore = require('connect-sqlite3')(session);
@@ -202,11 +203,123 @@ app.post('/admin/forzar-logout', async (req, res) => {
   res.json({ ok: true });
 });
 
-// ====== Arranque ======
-const PORT = process.env.PORT || 8080;
+// =====================
+//  Helpers para Weather
+// =====================
+const WEATHER_API_KEY = process.env.WEATHER_API_KEY;
+const DEFAULT_STATION_ID = process.env.STATION_ID || 'IALFAR32';
 
+function toYYYYMMDD(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
 
-// === Ruta añadida: total de lluvia acumulada ===
+async function jsonFetch(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  const text = await r.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    const status = `${r.status} ${r.statusText}`;
+    throw new Error(`Respuesta no JSON desde origen (${status})`);
+  }
+  if (!r.ok) {
+    const msg = data?.message || data?.error || `${r.status} ${r.statusText}`;
+    const err = new Error(msg);
+    err.status = r.status;
+    throw err;
+  }
+  return data;
+}
+
+// =====================================
+//  Rutas API Weather (públicas/proxy)
+//  (no requieren sesión; añade requiereSesionUnica si quieres)
+// =====================================
+
+// Datos en tiempo real
+app.get('/api/weather/current', async (req, res) => {
+  try {
+    const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
+    if (!WEATHER_API_KEY) throw new Error('Falta WEATHER_API_KEY');
+
+    const wu = new URL('https://api.weather.com/v2/pws/observations/current');
+    wu.searchParams.set('stationId', stationId);
+    wu.searchParams.set('format', 'json');
+    wu.searchParams.set('units', 'm');
+    wu.searchParams.set('apiKey', WEATHER_API_KEY);
+
+    const data = await jsonFetch(wu);
+    res.set('Cache-Control', 'no-store');
+    res.json(data);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'Error' });
+  }
+});
+
+// Histórico diario por rango
+app.get('/api/weather/history', async (req, res) => {
+  try {
+    const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
+    const startDate = (req.query.startDate || '').trim();
+    const endDate = (req.query.endDate || '').trim();
+    if (!startDate || !endDate) throw new Error('Faltan parámetros: startDate y endDate');
+    if (!WEATHER_API_KEY) throw new Error('Falta WEATHER_API_KEY');
+
+    const wu = new URL('https://api.weather.com/v2/pws/history/daily');
+    wu.searchParams.set('stationId', stationId);
+    wu.searchParams.set('format', 'json');
+    wu.searchParams.set('units', 'm');
+    wu.searchParams.set('startDate', startDate);
+    wu.searchParams.set('endDate', endDate);
+    wu.searchParams.set('apiKey', WEATHER_API_KEY);
+
+    const data = await jsonFetch(wu);
+    res.set('Cache-Control', 'public, max-age=120, s-maxage=300');
+    res.json(data);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'Error' });
+  }
+});
+
+// Lluvia total del año actual (suma precipTotal del histórico)
+// Devuelve { total_mm, year, desde, hasta }
+app.get('/api/lluvia/total/year', async (req, res) => {
+  try {
+    const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
+    if (!WEATHER_API_KEY) throw new Error('Falta WEATHER_API_KEY');
+
+    const now = new Date();
+    const desde = toYYYYMMDD(new Date(now.getFullYear(), 0, 1));
+    const hasta = toYYYYMMDD(now);
+
+    const wu = new URL('https://api.weather.com/v2/pws/history/daily');
+    wu.searchParams.set('stationId', stationId);
+    wu.searchParams.set('format', 'json');
+    wu.searchParams.set('units', 'm');
+    wu.searchParams.set('startDate', desde);
+    wu.searchParams.set('endDate', hasta);
+    wu.searchParams.set('apiKey', WEATHER_API_KEY);
+
+    const data = await jsonFetch(wu);
+    const observations = Array.isArray(data?.observations) ? data.observations : [];
+    const total = observations.reduce((acc, day) => {
+      const v = Number(day?.metric?.precipTotal ?? day?.precipTotal ?? 0);
+      return acc + (Number.isFinite(v) ? v : 0);
+    }, 0);
+
+    res.set('Cache-Control', 'public, max-age=300, s-maxage=900');
+    res.json({ total_mm: Number(total.toFixed(1)), year: now.getFullYear(), desde, hasta });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'Error' });
+  }
+});
+
+// === Ruta añadida: total de lluvia acumulada desde API externa configurable ===
+// (se mantiene tal cual la enviaste)
 app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
   try {
     const apiUrl = process.env.LLUVIA_API_URL;
@@ -217,18 +330,15 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
     if (!r.ok) throw new Error('API externa HTTP ' + r.status);
     const datos = await r.json();
 
-    // Helper para castear a número seguro
     const num = (v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
     };
 
-    // 0) Si viene directamente un número (o string numérico)
     if (typeof datos === 'number' || (typeof datos === 'string' && !Number.isNaN(Number(datos)))) {
       return res.json({ total_mm: num(datos) });
     }
 
-    // 1) Si viene total directo
     if (datos && typeof datos === 'object') {
       for (const k of ['total_mm','total','acumulado','acumulado_mm','acumulado_dia_mm']) {
         if (k in datos && (typeof datos[k] === 'number' || typeof datos[k] === 'string')) {
@@ -237,12 +347,10 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
       }
     }
 
-    // 2) Si viene array (posible lista de lecturas / días)
     const arr = Array.isArray(datos) ? datos
               : (datos && (Array.isArray(datos.items) ? datos.items : (Array.isArray(datos.data) ? datos.data : null)));
 
     if (arr) {
-      // 2.a) Si los elementos ya traen 'acumulado*', usar el último por fecha o el mayor valor
       const pickAccum = (o) => o?.acumulado_mm ?? o?.acumulado ?? o?.acumulado_dia_mm ?? null;
       let hadAccum = false;
       let byDate = [];
@@ -257,19 +365,15 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
         }
       }
       if (hadAccum) {
-        // Preferir último por fecha si existe alguna
         const withFecha = byDate.filter(x => x.fecha);
         if (withFecha.length) {
-          // Ordenar por fecha asc y coger el último
           withFecha.sort((a,b) => (new Date(a.fecha)) - (new Date(b.fecha)));
           return res.json({ total_mm: num(withFecha[withFecha.length-1].val) });
         }
-        // En su defecto, el mayor valor (acumulado final)
         const maxVal = byDate.reduce((m,x) => Math.max(m, x.val), 0);
         return res.json({ total_mm: num(maxVal) });
       }
 
-      // 2.b) Si NO traen 'acumulado*', sumar por campos típicos
       const total = arr.reduce((acc, d) => {
         const v = d?.mm ?? d?.lluvia ?? d?.precip_mm ?? d?.rain ?? 0;
         return acc + num(v);
@@ -285,6 +389,8 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
 });
 // === Fin ruta añadida ===
 
+// ====== Arranque ======
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`));
 
 
