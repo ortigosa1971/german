@@ -1,5 +1,5 @@
-
-  "name": "german-fixed",
+{
+  "name": "german-weather-app",
   "version": "1.0.0",
   "private": true,
   "type": "commonjs",
@@ -13,7 +13,5 @@
     "better-sqlite3": "^9.4.5",
     "cors": "^2.8.5"
   },
-  "engines": {
-    "node": ">=18"
-  }
+  "engines": { "node": ">=18" }
 }
