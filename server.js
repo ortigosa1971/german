@@ -1,7 +1,5 @@
 // server.js — sesión única, reemplaza sesión anterior automáticamente, con claim atómico
 // Listo para Railway: incluye /health y raíz '/'
-// Corrección completa para CORS (front/back en dominios distintos) y cookies cross-site.
-
 const express = require('express');
 const session = require('express-session');
 const SQLiteStore = require('connect-sqlite3')(session);
@@ -9,48 +7,19 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 const util = require('util');
-const cors = require('cors');
 
 const app = express();
 app.set('trust proxy', 1);
 
-// ====== Config ======
-const FRONT_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://german-production-d2b4.up.railway.app')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
-
 // ====== Carpetas ======
-const DB_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, 'db');
+const DB_DIR = path.join(__dirname, 'db');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// ====== CORS (antes de session y rutas) ======
-app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, true); // permite curl/health
-    return FRONT_ORIGINS.includes(origin)
-      ? cb(null, true)
-      : cb(new Error('CORS not allowed'), false);
-  },
-  credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.options('*', cors({
-  origin: FRONT_ORIGINS,
-  credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
 // ====== Sesiones (SQLite) ======
-const SESSIONS_DIR = process.env.SESSIONS_DIR || '/data';
-if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-
 const store = new SQLiteStore({
   db: 'sessions.sqlite',
-  dir: SESSIONS_DIR
+  dir: DB_DIR
 });
 
 app.use(session({
@@ -60,8 +29,8 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    sameSite: 'none',               // requerido para dominios distintos
-    secure: true,                   // Railway usa HTTPS
+    sameSite: process.env.SAMESITE || 'lax', // 'none' si front/back en dominios distintos (+ secure:true)
+    secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60 * 8
   }
 }));
@@ -76,11 +45,7 @@ app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
 // ====== DB usuarios ======
-const USERS_DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'usuarios.db');
-const dbDir = path.dirname(USERS_DB_PATH);
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-
-const db = new Database(USERS_DB_PATH);
+const db = new Database(path.join(DB_DIR, 'usuarios.db'));
 db.pragma('journal_mode = wal');
 db.prepare(`
   CREATE TABLE IF NOT EXISTS users (
@@ -160,57 +125,35 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// ====== Middleware: sesión única (API -> JSON 401; páginas -> redirect) ======
+// ====== Middleware: sesión única ======
 async function requiereSesionUnica(req, res, next) {
   try {
-    const isApi = req.path.startsWith('/api/');
-
-    if (!req.session?.usuario) {
-      return isApi
-        ? res.status(401).json({ ok: false, error: 'unauthorized' })
-        : res.redirect('/login.html');
-    }
+    if (!req.session?.usuario) return res.redirect('/login.html');
 
     const row = db.prepare('SELECT session_id FROM users WHERE username = ?').get(req.session.usuario);
-    if (!row) {
-      return isApi
-        ? res.status(401).json({ ok: false, error: 'unauthorized' })
-        : res.redirect('/login.html');
-    }
+    if (!row) return res.redirect('/login.html');
 
     if (!row.session_id) {
-      return req.session.destroy(() => {
-        return isApi
-          ? res.status(401).json({ ok: false, error: 'session_invalid' })
-          : res.redirect('/login.html?error=sesion_invalida');
-      });
+      req.session.destroy(() => res.redirect('/login.html?error=sesion_invalida'));
+      return;
     }
 
     if (row.session_id !== req.sessionID) {
-      return req.session.destroy(() => {
-        return isApi
-          ? res.status(401).json({ ok: false, error: 'logged_elsewhere' })
-          : res.redirect('/login.html?error=conectado_en_otra_maquina');
-      });
+      req.session.destroy(() => res.redirect('/login.html?error=conectado_en_otra_maquina'));
+      return;
     }
 
     const sess = await storeGet(row.session_id);
     if (!sess) {
       db.prepare('UPDATE users SET session_id = NULL WHERE username = ?').run(req.session.usuario);
-      return req.session.destroy(() => {
-        return isApi
-          ? res.status(401).json({ ok: false, error: 'session_expired' })
-          : res.redirect('/login.html?error=sesion_expirada');
-      });
+      req.session.destroy(() => res.redirect('/login.html?error=sesion_expirada'));
+      return;
     }
 
     next();
   } catch (e) {
     console.error(e);
-    const isApi = req.path.startsWith('/api/');
-    return isApi
-      ? res.status(500).json({ ok: false, error: 'internal' })
-      : res.redirect('/login.html?error=interno');
+    res.redirect('/login.html?error=interno');
   }
 }
 
@@ -248,121 +191,10 @@ app.post('/logout', (req, res) => {
   });
 });
 
-// =====================
-//  Helpers para Weather
-// =====================
-const WEATHER_API_KEY = process.env.WEATHER_API_KEY;
-const DEFAULT_STATION_ID = process.env.STATION_ID || 'IALFAR32';
+// ====== Arranque ======
+const PORT = process.env.PORT || 8080;
 
-function toYYYYMMDD(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}${m}${d}`;
-}
-
-async function jsonFetch(url) {
-  const r = await fetch(url, { cache: 'no-store' });
-  const text = await r.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    const status = `${r.status} ${r.statusText}`;
-    throw new Error(`Respuesta no JSON desde origen (${status})`);
-  }
-  if (!r.ok) {
-    const msg = data?.message || data?.error || `${r.status} ${r.statusText}`;
-    const err = new Error(msg);
-    err.status = r.status;
-    throw err;
-  }
-  return data;
-}
-
-// =====================================
-//  Rutas API Weather (públicas/proxy)
-//  (sin sesión para evitar 302 en CORS)
-// =====================================
-
-// Datos en tiempo real
-app.get('/api/weather/current', async (req, res) => {
-  try {
-    const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
-    if (!WEATHER_API_KEY) throw new Error('Falta WEATHER_API_KEY');
-
-    const wu = new URL('https://api.weather.com/v2/pws/observations/current');
-    wu.searchParams.set('stationId', stationId);
-    wu.searchParams.set('format', 'json');
-    wu.searchParams.set('units', 'm');
-    wu.searchParams.set('apiKey', WEATHER_API_KEY);
-
-    const data = await jsonFetch(wu);
-    res.set('Cache-Control', 'no-store');
-    res.json(data);
-  } catch (e) {
-    res.status(e.status || 500).json({ error: e.message || 'Error' });
-  }
-});
-
-// Histórico diario por rango
-app.get('/api/weather/history', async (req, res) => {
-  try {
-    const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
-    const startDate = (req.query.startDate || '').trim();
-    const endDate = (req.query.endDate || '').trim();
-    if (!startDate || !endDate) throw new Error('Faltan parámetros: startDate y endDate');
-    if (!WEATHER_API_KEY) throw new Error('Falta WEATHER_API_KEY');
-
-    const wu = new URL('https://api.weather.com/v2/pws/history/daily');
-    wu.searchParams.set('stationId', stationId);
-    wu.searchParams.set('format', 'json');
-    wu.searchParams.set('units', 'm');
-    wu.searchParams.set('startDate', startDate);
-    wu.searchParams.set('endDate', endDate);
-    wu.searchParams.set('apiKey', WEATHER_API_KEY);
-
-    const data = await jsonFetch(wu);
-    res.set('Cache-Control', 'public, max-age=120, s-maxage=300');
-    res.json(data);
-  } catch (e) {
-    res.status(e.status || 500).json({ error: e.message || 'Error' });
-  }
-});
-
-// Lluvia total del año actual (suma precipTotal del histórico)
-app.get('/api/lluvia/total/year', async (req, res) => {
-  try {
-    const stationId = (req.query.stationId || DEFAULT_STATION_ID).trim();
-    if (!WEATHER_API_KEY) throw new Error('Falta WEATHER_API_KEY');
-
-    const now = new Date();
-    const desde = toYYYYMMDD(new Date(now.getFullYear(), 0, 1));
-    const hasta = toYYYYMMDD(now);
-
-    const wu = new URL('https://api.weather.com/v2/pws/history/daily');
-    wu.searchParams.set('stationId', stationId);
-    wu.searchParams.set('format', 'json');
-    wu.searchParams.set('units', 'm');
-    wu.searchParams.set('startDate', desde);
-    wu.searchParams.set('endDate', hasta);
-    wu.searchParams.set('apiKey', WEATHER_API_KEY);
-
-    const data = await jsonFetch(wu);
-    const observations = Array.isArray(data?.observations) ? data.observations : [];
-    const total = observations.reduce((acc, day) => {
-      const v = Number(day?.metric?.precipTotal ?? day?.precipTotal ?? 0);
-      return acc + (Number.isFinite(v) ? v : 0);
-    }, 0);
-
-    res.set('Cache-Control', 'public, max-age=300, s-maxage=900');
-    res.json({ total_mm: Number(total.toFixed(1)), year: now.getFullYear(), desde, hasta });
-  } catch (e) {
-    res.status(e.status || 500).json({ error: e.message || 'Error' });
-  }
-});
-
-// === Ruta añadida: total de lluvia acumulada desde API externa configurable ===
+// ========= RUTA EXISTENTE: total de lluvia acumulada (API externa configurable)
 app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
   try {
     const apiUrl = process.env.LLUVIA_API_URL;
@@ -373,15 +205,18 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
     if (!r.ok) throw new Error('API externa HTTP ' + r.status);
     const datos = await r.json();
 
+    // Helper para castear a número seguro
     const num = (v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
-      };
+    };
 
+    // 0) Si viene directamente un número (o string numérico)
     if (typeof datos === 'number' || (typeof datos === 'string' && !Number.isNaN(Number(datos)))) {
       return res.json({ total_mm: num(datos) });
     }
 
+    // 1) Si viene total directo
     if (datos && typeof datos === 'object') {
       for (const k of ['total_mm','total','acumulado','acumulado_mm','acumulado_dia_mm']) {
         if (k in datos && (typeof datos[k] === 'number' || typeof datos[k] === 'string')) {
@@ -390,10 +225,12 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
       }
     }
 
+    // 2) Si viene array (posible lista de lecturas / días)
     const arr = Array.isArray(datos) ? datos
               : (datos && (Array.isArray(datos.items) ? datos.items : (Array.isArray(datos.data) ? datos.data : null)));
 
     if (arr) {
+      // 2.a) Si los elementos ya traen 'acumulado*', usar el último por fecha o el mayor valor
       const pickAccum = (o) => o?.acumulado_mm ?? o?.acumulado ?? o?.acumulado_dia_mm ?? null;
       let hadAccum = false;
       let byDate = [];
@@ -408,15 +245,19 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
         }
       }
       if (hadAccum) {
+        // Preferir último por fecha si existe alguna
         const withFecha = byDate.filter(x => x.fecha);
         if (withFecha.length) {
+          // Ordenar por fecha asc y coger el último
           withFecha.sort((a,b) => (new Date(a.fecha)) - (new Date(b.fecha)));
           return res.json({ total_mm: num(withFecha[withFecha.length-1].val) });
         }
+        // En su defecto, el mayor valor (acumulado final)
         const maxVal = byDate.reduce((m,x) => Math.max(m, x.val), 0);
         return res.json({ total_mm: num(maxVal) });
       }
 
+      // 2.b) Si NO traen 'acumulado*', sumar por campos típicos
       const total = arr.reduce((acc, d) => {
         const v = d?.mm ?? d?.lluvia ?? d?.precip_mm ?? d?.rain ?? 0;
         return acc + num(v);
@@ -430,16 +271,160 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
     res.status(500).json({ error: 'No se pudo calcular el total', detalle: String(e.message || e) });
   }
 });
-// === Fin ruta añadida ===
+// === Fin ruta existente ===
 
-// ====== Arranque ======
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión + CORS listo`));
+// ========= RUTA NUEVA: lluvia acumulada del AÑO ACTUAL (WU)
+app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
+  try {
+    const apiKey = process.env.WU_API_KEY;
+    const stationId = process.env.WU_STATION_ID;
+    if (!apiKey || !stationId) {
+      return res.status(400).json({
+        error: 'config_missing',
+        detalle: 'Define WU_API_KEY y WU_STATION_ID en el .env'
+      });
+    }
 
+    const ahora = new Date();
+    const year = ahora.getFullYear();
+    const pad = (n) => String(n).padStart(2, '0');
+    const startDate = `${year}0101`; // inclusive
+    const endDate = `${year}${pad(ahora.getMonth() + 1)}${pad(ahora.getDate())}`; // inclusive
 
+    const url = `https://api.weather.com/v2/pws/history/daily?stationId=${encodeURIComponent(stationId)}&format=json&units=m&startDate=${startDate}&endDate=${endDate}&apiKey=${encodeURIComponent(apiKey)}`;
 
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari',
+        'Accept': 'application/json,text/plain,*/*',
+        'Accept-Language': 'es-ES,es;q=0.9'
+      }
+    });
+    if (!r.ok) throw new Error(`WU HTTP ${r.status}`);
+    const data = await r.json();
 
+    const arr = Array.isArray(data?.observations) ? data.observations : [];
+    const totalYear = arr.reduce((acc, d) => {
+      const mm = Number(d?.metric?.precipTotal ?? 0);
+      return acc + (Number.isFinite(mm) ? mm : 0);
+    }, 0);
 
+    return res.json({
+      total_mm: Number(totalYear.toFixed(2)),
+      year,
+      desde: `${year}-01-01`,
+      hasta: `${year}-${pad(ahora.getMonth() + 1)}-${pad(ahora.getDate())}`,
+      origen: 'WU history/daily'
+    });
+  } catch (e) {
+    console.error('Error /api/lluvia/total/year:', e);
+    res.status(500).json({ error: 'calc_failed', detalle: String(e.message || e) });
+  }
+});
+// === Fin ruta nueva ===
+
+// ========= NUEVOS PROXIES: Weather.com PWS (evitan CORS y WAF) =========
+const UA = process.env.USER_AGENT ||
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari';
+
+// Condiciones actuales via PWS
+app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
+  try {
+    const apiKey = process.env.WEATHER_API_KEY || process.env.WU_API_KEY; // acepta cualquiera
+    const stationId = req.query.stationId || process.env.WU_STATION_ID;
+    const units = req.query.units || 'm';
+    if (!apiKey || !stationId) {
+      return res.status(400).json({ error: 'config_missing', detalle: 'Faltan WEATHER_API_KEY/WU_API_KEY o WU_STATION_ID' });
+    }
+
+    const url = new URL('https://api.weather.com/v2/pws/observations/current');
+    url.searchParams.set('stationId', stationId);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('units', units);
+    url.searchParams.set('apiKey', apiKey);
+
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': UA,
+        'Accept': 'application/json,text/plain,*/*',
+        'Accept-Language': 'es-ES,es;q=0.9',
+        'Connection': 'keep-alive'
+      }
+    });
+
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    const body = await r.text();
+
+    if (!r.ok) {
+      console.error('Upstream /current error', r.status, ct, body.slice(0, 300));
+      return res.status(r.status).json({ error: 'weather.com denied', status: r.status });
+    }
+    if (!ct.includes('application/json')) {
+      console.error('Unexpected content-type /current:', ct, body.slice(0, 300));
+      return res.status(502).json({ error: 'Invalid response from weather.com' });
+    }
+
+    res.set('Cache-Control', 'public, max-age=60');
+    res.type('application/json').send(body);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Weather proxy failed' });
+  }
+});
+
+// Histórico diario via PWS
+app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
+  try {
+    const apiKey = process.env.WEATHER_API_KEY || process.env.WU_API_KEY;
+    const stationId = req.query.stationId || process.env.WU_STATION_ID;
+    const { startDate, endDate } = req.query;
+    const units = req.query.units || 'm';
+    if (!apiKey || !stationId) {
+      return res.status(400).json({ error: 'config_missing', detalle: 'Faltan WEATHER_API_KEY/WU_API_KEY o WU_STATION_ID' });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'params_missing', detalle: 'startDate y endDate son obligatorios (YYYYMMDD)' });
+    }
+
+    const url = new URL('https://api.weather.com/v2/pws/history/daily');
+    url.searchParams.set('stationId', stationId);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('units', units);
+    url.searchParams.set('startDate', startDate);
+    url.searchParams.set('endDate', endDate);
+    url.searchParams.set('apiKey', apiKey);
+
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': UA,
+        'Accept': 'application/json,text/plain,*/*',
+        'Accept-Language': 'es-ES,es;q=0.9',
+        'Connection': 'keep-alive'
+      }
+    });
+
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    const body = await r.text();
+
+    if (!r.ok) {
+      console.error('Upstream /history error', r.status, ct, body.slice(0, 300));
+      return res.status(r.status).json({ error: 'weather.com denied', status: r.status });
+    }
+    if (!ct.includes('application/json')) {
+      console.error('Unexpected content-type /history:', ct, body.slice(0, 300));
+      return res.status(502).json({ error: 'Invalid response from weather.com' });
+    }
+
+    res.set('Cache-Control', 'public, max-age=300');
+    res.type('application/json').send(body);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Weather history proxy failed' });
+  }
+});
+// === Fin proxies ===
+
+app.listen(PORT, () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`));
 
 
 
