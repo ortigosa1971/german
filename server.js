@@ -8,32 +8,46 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 const util = require('util');
-const cors = require('cors'); // <-- CORS
+const cors = require('cors');
 
 const app = express();
 app.set('trust proxy', 1);
 
 // ====== CORS (debe ir ANTES de sesión y de las rutas) ======
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || '')
+const ALLOWED = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map(s => s.trim())
+  .map(s => s.trim().replace(/\/+$/, '')) // sin barra final
   .filter(Boolean);
 
 const corsMiddleware = cors({
   origin(origin, cb) {
-    // Permite healthchecks y herramientas sin origin
+    // Permite healthchecks/CLI sin Origin
     if (!origin) return cb(null, true);
-    // Si no configuras CORS_ORIGINS, permite todo (útil en pruebas)
-    if (ALLOWED_ORIGINS.length === 0) return cb(null, true);
-    cb(ALLOWED_ORIGINS.includes(origin) ? null : new Error('Not allowed by CORS'), true);
+    // Si no se configura lista, aceptar todos (útil en pruebas)
+    if (ALLOWED.length === 0) return cb(null, true);
+    const clean = origin.replace(/\/+$/, '');
+    const ok = ALLOWED.includes(clean);
+    cb(ok ? null : new Error('Not allowed by CORS'), ok);
   },
   credentials: true,
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 });
+
+// Log de diagnóstico (activar con DEBUG_CORS=1)
+app.use((req, res, next) => {
+  if (process.env.DEBUG_CORS === '1') {
+    console.log('[CORS] Origin:', req.headers.origin, 'Allowed:', ALLOWED);
+  }
+  next();
+});
+
 app.use(corsMiddleware);
-// Responder preflight global
 app.options('*', corsMiddleware);
+// Ayuda a caches/proxies
+app.use((req, res, next) => { res.header('Vary', 'Origin'); next(); });
 
 // ====== Carpetas ======
 const DB_DIR = path.join(__dirname, 'db');
@@ -42,10 +56,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
 // ====== Sesiones (SQLite) ======
-const store = new SQLiteStore({
-  db: 'sessions.sqlite',
-  dir: DB_DIR
-});
+const store = new SQLiteStore({ db: 'sessions.sqlite', dir: DB_DIR });
 
 app.use(session({
   store,
@@ -54,7 +65,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    // IMPORTANTE para cross-site: usa 'none' en producción con dominios distintos
+    // Cross-site entre dominios → None + Secure
     sameSite: process.env.SAMESITE || 'none',
     secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60 * 8
@@ -91,7 +102,7 @@ const log = (...a) => DEBUG && console.log('[single-session]', ...a);
 
 // ====== Healthcheck (PÚBLICO) ======
 app.get('/health', (req, res) => res.status(200).send('OK'));
-app.get('/salud', (req, res) => res.status(200).send('OK')); // alias por si Railway usa /salud
+app.get('/salud', (req, res) => res.status(200).send('OK')); // alias
 
 // ====== Raíz (PÚBLICO) ======
 app.get('/', (req, res) => {
@@ -128,30 +139,27 @@ app.post('/login', async (req, res) => {
 
     // 1) Si había una sesión previa, EXPULSARLA SIEMPRE (reemplazo automático)
     if (user.session_id) {
-      await storeDestroy(user.session_id).catch(() => {}); // ignora error si ya expiró
+      await storeDestroy(user.session_id).catch(() => {});
       db.prepare('UPDATE users SET session_id = NULL WHERE username = ?').run(user.username);
     }
 
-    // 2) Regenerar sesión para nuevo SID (evita fijación y choques)
+    // 2) Regenerar sesión para nuevo SID
     await new Promise((resolve, reject) => {
       req.session.regenerate(err => (err ? reject(err) : resolve()));
     });
 
-    // 3) Claim ATÓMICO: tomar la sesión solo si sigue NULL
+    // 3) Claim ATÓMICO
     const claim = db.prepare(
       'UPDATE users SET session_id = ? WHERE username = ? AND session_id IS NULL'
     ).run(req.sessionID, user.username);
 
     if (claim.changes === 0) {
-      // Alguna carrera extrema: otro proceso tomó la sesión en microsegundos
       return res.redirect('/login.html?error=sesion_activa');
     }
 
-    // 4) Completar sesión de app
+    // 4) Completar sesión
     req.session.usuario = user.username;
     log('login OK (reemplazo + claim) para', user.username, 'sid:', req.sessionID);
-
-    // ✅ Ir a ruta protegida (no al archivo estático)
     return res.redirect('/inicio');
   } catch (e) {
     console.error(e);
@@ -449,8 +457,6 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () =>
   console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`)
 );
-
-
 
 
 
