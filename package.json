@@ -1,16 +1,23 @@
 {
-  "$schema": "https://railway.com/railway.schema.json",
-  "build": {
-    "builder": "NIXPACKS"
+  "name": "estacion",
+  "version": "1.0.0",
+  "description": "Servidor Node.js con sesión única y API de lluvia (listo para Railway)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "inicio": "node server.js"
   },
-  "deploy": {
-    "runtime": "V2",
-    "numReplicas": 1,
-    "sleepApplication": false,
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10,
-    "startCommand": "npm start",
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 120
-  }
+  "dependencies": {
+    "better-sqlite3": "^9.0.0",
+    "connect-sqlite3": "^0.9.15",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "express-session": "^1.17.3",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18 <21"
+  },
+  "license": "MIT"
 }
