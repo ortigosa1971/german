@@ -8,9 +8,32 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 const util = require('util');
+const cors = require('cors'); // <-- CORS
 
 const app = express();
 app.set('trust proxy', 1);
+
+// ====== CORS (debe ir ANTES de sesión y de las rutas) ======
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const corsMiddleware = cors({
+  origin(origin, cb) {
+    // Permite healthchecks y herramientas sin origin
+    if (!origin) return cb(null, true);
+    // Si no configuras CORS_ORIGINS, permite todo (útil en pruebas)
+    if (ALLOWED_ORIGINS.length === 0) return cb(null, true);
+    cb(ALLOWED_ORIGINS.includes(origin) ? null : new Error('Not allowed by CORS'), true);
+  },
+  credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+});
+app.use(corsMiddleware);
+// Responder preflight global
+app.options('*', corsMiddleware);
 
 // ====== Carpetas ======
 const DB_DIR = path.join(__dirname, 'db');
@@ -31,7 +54,8 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    sameSite: process.env.SAMESITE || 'lax', // usa 'none' + secure:true si front/back están en dominios distintos
+    // IMPORTANTE para cross-site: usa 'none' en producción con dominios distintos
+    sameSite: process.env.SAMESITE || 'none',
     secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60 * 8
   }
