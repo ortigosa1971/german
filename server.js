@@ -1,5 +1,6 @@
-// server.js — sesión única, reemplaza sesión anterior automáticamente, con claim atómico
-// Listo para Railway: incluye /health y raíz '/'
+// server.js — sesión única con reemplazo y claim atómico
+// Listo para Railway: incluye /health, /salud y raíz '/'
+
 const express = require('express');
 const session = require('express-session');
 const SQLiteStore = require('connect-sqlite3')(session);
@@ -15,6 +16,7 @@ app.set('trust proxy', 1);
 const DB_DIR = path.join(__dirname, 'db');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 const PUBLIC_DIR = path.join(__dirname, 'public');
+if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
 // ====== Sesiones (SQLite) ======
 const store = new SQLiteStore({
@@ -29,7 +31,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    sameSite: process.env.SAMESITE || 'lax', // 'none' si front/back en dominios distintos (+ secure:true)
+    sameSite: process.env.SAMESITE || 'lax', // usa 'none' + secure:true si front/back están en dominios distintos
     secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60 * 8
   }
@@ -55,13 +57,19 @@ db.prepare(`
   )
 `).run();
 
+// Semilla opcional (solo si no hay admin)
+if (process.env.SEED_ADMIN === '1') {
+  db.prepare("INSERT OR IGNORE INTO users (username, password, session_id) VALUES ('admin','1234',NULL)").run();
+}
+
 const DEBUG = process.env.DEBUG_SINGLE_SESSION === '1';
 const log = (...a) => DEBUG && console.log('[single-session]', ...a);
 
-// ====== Healthcheck (PUBLICO) ======
+// ====== Healthcheck (PÚBLICO) ======
 app.get('/health', (req, res) => res.status(200).send('OK'));
+app.get('/salud', (req, res) => res.status(200).send('OK')); // alias por si Railway usa /salud
 
-// ====== Raíz (PUBLICO) ======
+// ====== Raíz (PÚBLICO) ======
 app.get('/', (req, res) => {
   const loginFile = path.join(PUBLIC_DIR, 'login.html');
   if (fs.existsSync(loginFile)) return res.sendFile(loginFile);
@@ -118,7 +126,9 @@ app.post('/login', async (req, res) => {
     // 4) Completar sesión de app
     req.session.usuario = user.username;
     log('login OK (reemplazo + claim) para', user.username, 'sid:', req.sessionID);
-    return res.redirect('/inicio.html');
+
+    // ✅ Ir a ruta protegida (no al archivo estático)
+    return res.redirect('/inicio');
   } catch (e) {
     console.error(e);
     return res.redirect('/login.html?error=interno');
@@ -171,6 +181,7 @@ app.get('/api/datos', requiereSesionUnica, (req, res) => {
   res.json({ ok: true, usuario: req.session.usuario, sid: req.sessionID });
 });
 
+// Estado de sesión (PÚBLICO)
 app.get('/verificar-sesion', (req, res) => {
   res.json({ activo: !!req.session?.usuario });
 });
@@ -191,9 +202,6 @@ app.post('/logout', (req, res) => {
   });
 });
 
-// ====== Arranque ======
-const PORT = process.env.PORT || 8080;
-
 // ========= RUTA EXISTENTE: total de lluvia acumulada (API externa configurable)
 app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
   try {
@@ -205,18 +213,15 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
     if (!r.ok) throw new Error('API externa HTTP ' + r.status);
     const datos = await r.json();
 
-    // Helper para castear a número seguro
     const num = (v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
     };
 
-    // 0) Si viene directamente un número (o string numérico)
     if (typeof datos === 'number' || (typeof datos === 'string' && !Number.isNaN(Number(datos)))) {
       return res.json({ total_mm: num(datos) });
     }
 
-    // 1) Si viene total directo
     if (datos && typeof datos === 'object') {
       for (const k of ['total_mm','total','acumulado','acumulado_mm','acumulado_dia_mm']) {
         if (k in datos && (typeof datos[k] === 'number' || typeof datos[k] === 'string')) {
@@ -225,12 +230,10 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
       }
     }
 
-    // 2) Si viene array (posible lista de lecturas / días)
     const arr = Array.isArray(datos) ? datos
               : (datos && (Array.isArray(datos.items) ? datos.items : (Array.isArray(datos.data) ? datos.data : null)));
 
     if (arr) {
-      // 2.a) Si los elementos ya traen 'acumulado*', usar el último por fecha o el mayor valor
       const pickAccum = (o) => o?.acumulado_mm ?? o?.acumulado ?? o?.acumulado_dia_mm ?? null;
       let hadAccum = false;
       let byDate = [];
@@ -245,19 +248,15 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
         }
       }
       if (hadAccum) {
-        // Preferir último por fecha si existe alguna
         const withFecha = byDate.filter(x => x.fecha);
         if (withFecha.length) {
-          // Ordenar por fecha asc y coger el último
           withFecha.sort((a,b) => (new Date(a.fecha)) - (new Date(b.fecha)));
           return res.json({ total_mm: num(withFecha[withFecha.length-1].val) });
         }
-        // En su defecto, el mayor valor (acumulado final)
         const maxVal = byDate.reduce((m,x) => Math.max(m, x.val), 0);
         return res.json({ total_mm: num(maxVal) });
       }
 
-      // 2.b) Si NO traen 'acumulado*', sumar por campos típicos
       const total = arr.reduce((acc, d) => {
         const v = d?.mm ?? d?.lluvia ?? d?.precip_mm ?? d?.rain ?? 0;
         return acc + num(v);
@@ -271,7 +270,6 @@ app.get('/api/lluvia/total', requiereSesionUnica, async (req, res) => {
     res.status(500).json({ error: 'No se pudo calcular el total', detalle: String(e.message || e) });
   }
 });
-// === Fin ruta existente ===
 
 // ========= RUTA NUEVA: lluvia acumulada del AÑO ACTUAL (WU)
 app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
@@ -288,8 +286,8 @@ app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
     const ahora = new Date();
     const year = ahora.getFullYear();
     const pad = (n) => String(n).padStart(2, '0');
-    const startDate = `${year}0101`; // inclusive
-    const endDate = `${year}${pad(ahora.getMonth() + 1)}${pad(ahora.getDate())}`; // inclusive
+    const startDate = `${year}0101`;
+    const endDate = `${year}${pad(ahora.getMonth() + 1)}${pad(ahora.getDate())}`;
 
     const url = `https://api.weather.com/v2/pws/history/daily?stationId=${encodeURIComponent(stationId)}&format=json&units=m&startDate=${startDate}&endDate=${endDate}&apiKey=${encodeURIComponent(apiKey)}`;
 
@@ -321,16 +319,15 @@ app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
     res.status(500).json({ error: 'calc_failed', detalle: String(e.message || e) });
   }
 });
-// === Fin ruta nueva ===
 
-// ========= NUEVOS PROXIES: Weather.com PWS (evitan CORS y WAF) =========
+// ========= PROXIES Weather.com PWS =========
 const UA = process.env.USER_AGENT ||
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari';
 
-// Condiciones actuales via PWS
+// Condiciones actuales
 app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey = process.env.WEATHER_API_KEY || process.env.WU_API_KEY; // acepta cualquiera
+    const apiKey = process.env.WEATHER_API_KEY || process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
     const units = req.query.units || 'm';
     if (!apiKey || !stationId) {
@@ -372,7 +369,7 @@ app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
   }
 });
 
-// Histórico diario via PWS
+// Histórico diario
 app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
   try {
     const apiKey = process.env.WEATHER_API_KEY || process.env.WU_API_KEY;
@@ -422,11 +419,12 @@ app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
     res.status(500).json({ error: 'Weather history proxy failed' });
   }
 });
-// === Fin proxies ===
 
-app.listen(PORT, () => console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`));
-
-
+// ====== Arranque ======
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () =>
+  console.log(`🚀 http://0.0.0.0:${PORT} — reemplazo automático de sesión activado`)
+);
 
 
 
